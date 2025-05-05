@@ -22,32 +22,21 @@ public class GetYahooResultController : Controller
     // GET&POST
     [HttpGet]
     [HttpPost]
-    public async Task<List<SearchEngineResult>> YahooSearch(string query, string apikey, int maxResults = 10)
+    public async Task<List<SearchEngineResult>> YahooSearch(string query, int page = 1, int maxResults = 10)
     {
-        if (string.IsNullOrWhiteSpace(apikey))
-        {
-            throw new ArgumentException("apikey cannot be null or empty.", nameof(apikey));
-        }
-
-        string systemApiKey = MD5Hash(_configuration["ApiKey"]);
-        if (systemApiKey != apikey)
-        {
-            throw new ArgumentException("apikey is invalid.", nameof(apikey));
-        }
-
         if (string.IsNullOrWhiteSpace(query))
         {
             throw new ArgumentException("Query cannot be null or empty.", nameof(query));
         }
 
-        if (maxResults <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maxResults), "maxResults must be greater than 0.");
-        }
-
         // Encode the query
         string encodedQuery = HttpUtility.UrlEncode(query);
-        string requestUrl = $"https://sg.search.yahoo.com/search?p={encodedQuery}&ei=UTF-8";
+
+        // 计算b参数，分页公式
+        int b = 1 + (page - 1) * 7;
+
+        // 构建请求URL
+        string requestUrl = string.Format(_configuration["YahooEndpoint:WebSearch"], encodedQuery, b);
 
         using (HttpClient client = new HttpClient())
         {
@@ -65,7 +54,7 @@ public class GetYahooResultController : Controller
                 client.DefaultRequestHeaders.Add("Sec-Fetch-User", "?1");
                 client.DefaultRequestHeaders.Add("Cache-Control", "no-cache");
 
-                // Make the request
+                // 获取网页内容
                 string response = await client.GetStringAsync(requestUrl);
 
                 MatchCollection urlMatches = Regex.Matches(response,
@@ -80,10 +69,10 @@ public class GetYahooResultController : Controller
                     "<span class=\"\\s*fc-falcon\\s*\"[^>]*>(.*?)</span>",
                     RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
-                // Create a list to store the results
+                // 创建结果列表
                 List<SearchEngineResult> results = new List<SearchEngineResult>();
 
-                // Combine the matches into SearchEngineResult objects
+                // 取较少的匹配数量，避免越界
                 int count = Math.Min(maxResults,
                     Math.Min(titleMatches.Count,
                         Math.Min(contentMatches.Count,
@@ -91,16 +80,14 @@ public class GetYahooResultController : Controller
 
                 for (int i = 0; i < count; i++)
                 {
-                    // 标题处理 - 提取文本并清理HTML
+                    // 提取标题
                     string rawTitle = titleMatches[i].Groups[1].Value.Trim();
-                    string title = Regex.Replace(rawTitle, "<.*?>", ""); // 移除可能存在的HTML标签
-                    title = HttpUtility.HtmlDecode(title); // 解码HTML实体
+                    string title = Regex.Replace(rawTitle, "<.*?>", "");
+                    title = HttpUtility.HtmlDecode(title);
 
-                    // 标题清洗 - 移除面包屑部分，只保留实际的标题部分
-                    // 面包屑通常是 "domain.com › path › path 实际标题"
+                    // 处理面包屑，提取纯标题
                     if (title.Contains(" › "))
                     {
-                        // 找到最后一个 "›" 后的内容
                         int lastArrowIndex = title.LastIndexOf("›");
                         if (lastArrowIndex >= 0 && lastArrowIndex < title.Length - 1)
                         {
@@ -108,14 +95,14 @@ public class GetYahooResultController : Controller
                         }
                     }
 
-                    string snippet = Regex.Replace(contentMatches[i].Groups[1].Value, "<.*?>", ""); // Remove HTML tags
-                    snippet = HttpUtility.HtmlDecode(snippet); // 解码HTML实体
+                    // 提取摘要内容
+                    string snippet = Regex.Replace(contentMatches[i].Groups[1].Value, "<.*?>", "");
+                    snippet = HttpUtility.HtmlDecode(snippet);
 
-                    // 清理URL，提取真实链接
+                    // 处理URL
                     string rawUrl = urlMatches[i].Groups[1].Value;
                     string cleanUrl = rawUrl;
 
-                    // 从Yahoo重定向URL中提取真实URL
                     if (rawUrl.Contains("/RU=") && rawUrl.Contains("/RK="))
                     {
                         int startIndex = rawUrl.IndexOf("/RU=") + 4;
@@ -137,15 +124,15 @@ public class GetYahooResultController : Controller
 
                 return results;
             }
-            catch (HttpRequestException ex)
+            catch (HttpRequestException)
             {
                 return new List<SearchEngineResult>();
             }
-            catch (RegexMatchTimeoutException ex)
+            catch (RegexMatchTimeoutException)
             {
                 return new List<SearchEngineResult>();
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 return new List<SearchEngineResult>();
             }
@@ -155,33 +142,18 @@ public class GetYahooResultController : Controller
     // GET&POST
     [HttpGet]
     [HttpPost]
-    public async Task<List<SearchEngineVideoResults>> YahooSearchVideo(string query, string apikey, int maxResults = 5)
+    public async Task<List<SearchEngineVideoResults>> YahooSearchVideo(string query, int page = 1, int maxResults = 10)
     {
-        if (string.IsNullOrWhiteSpace(apikey))
-        {
-            throw new ArgumentException("apikey cannot be null or empty.", nameof(apikey));
-        }
-
-        string systemApiKey = MD5Hash(_configuration["ApiKey"]);
-        if (systemApiKey != apikey)
-        {
-            throw new ArgumentException("apikey is invalid.", nameof(apikey));
-        }
-
         if (string.IsNullOrWhiteSpace(query))
         {
             throw new ArgumentException("Query cannot be null or empty.", nameof(query));
         }
 
-        if (maxResults <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maxResults), "maxResults must be greater than 0.");
-        }
-
         string encodedQuery = HttpUtility.UrlEncode(query);
-        string requestUrl = $"https://sg.search.yahoo.com/search/video?p={encodedQuery}&ei=UTF-8";
-        int maxRedirects = 10;
+        int b = 1 + (page - 1) * 60; // 计算分页参数
+        string requestUrl = string.Format(_configuration["YahooEndpoint:VideoSearch"], encodedQuery, b);
 
+        int maxRedirects = 10;
         using (HttpClientHandler handler = new HttpClientHandler() { AllowAutoRedirect = false })
         using (HttpClient client = new HttpClient(handler))
         {
@@ -198,9 +170,11 @@ public class GetYahooResultController : Controller
                 client.DefaultRequestHeaders.Add("Sec-Fetch-Site", "none");
                 client.DefaultRequestHeaders.Add("Sec-Fetch-User", "?1");
                 client.DefaultRequestHeaders.Add("Cache-Control", "no-cache");
+
                 HttpResponseMessage response = await client.GetAsync(requestUrl);
                 int redirectCount = 0;
 
+                // 处理可能的重定向
                 while ((response.StatusCode == HttpStatusCode.MovedPermanently ||
                         response.StatusCode == HttpStatusCode.Found ||
                         response.StatusCode == HttpStatusCode.TemporaryRedirect ||
@@ -208,7 +182,6 @@ public class GetYahooResultController : Controller
                        redirectCount < maxRedirects)
                 {
                     string redirectUrl = response.Headers.Location.ToString();
-
                     if (!Uri.IsWellFormedUriString(redirectUrl, UriKind.Absolute))
                     {
                         redirectUrl = new Uri(new Uri(requestUrl), redirectUrl).ToString();
@@ -228,20 +201,21 @@ public class GetYahooResultController : Controller
                 response.EnsureSuccessStatusCode();
                 string responseBody = await response.Content.ReadAsStringAsync();
 
-
-                // --- KEY CHANGE: More Specific Regex ---
-                // Match <li> elements with class "vr vres", then find <a> tags within them.
+                // 正则匹配查询结果
                 MatchCollection titleMatches = Regex.Matches(responseBody,
                     @"<li[^>]*class=""vr vres""[^>]*>.*?<a[^>]*aria-label=""([^""]*)""[^>]*>",
                     RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
                 MatchCollection urlMatches = Regex.Matches(responseBody,
                     @"<li[^>]*class=""vr vres""[^>]*>.*?<a[^>]*data-rurl=""([^""]*)""[^>]*>",
                     RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
                 MatchCollection imageMatches = Regex.Matches(responseBody,
                     @"<li[^>]*class=""vr vres""[^>]*>.*?<img[^>]*src=""([^""]*)""[^>]*class=""thm""[^>]*>",
                     RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
                 List<SearchEngineVideoResults> results = new List<SearchEngineVideoResults>();
+
                 int count = Math.Min(maxResults,
                     Math.Min(titleMatches.Count, Math.Min(urlMatches.Count, imageMatches.Count)));
 
@@ -264,12 +238,12 @@ public class GetYahooResultController : Controller
             }
             catch (HttpRequestException ex)
             {
-                Console.WriteLine($"Error during Yahoo search: {ex.Message}");
+                Console.WriteLine($"Error during Yahoo video search: {ex.Message}");
                 return new List<SearchEngineVideoResults>();
             }
             catch (RegexMatchTimeoutException ex)
             {
-                Console.WriteLine($"Regex timeout during Yahoo search: {ex.Message}");
+                Console.WriteLine($"Regex timeout during Yahoo video search: {ex.Message}");
                 return new List<SearchEngineVideoResults>();
             }
             catch (Exception ex)
@@ -280,33 +254,19 @@ public class GetYahooResultController : Controller
         }
     }
 
+    // GET&POST
     [HttpGet]
     [HttpPost]
-    public async Task<List<SearchEngineImageResults>> YahooSearchImages(string query, string apikey, int maxResults = 5)
+    public async Task<List<SearchEngineImageResults>> YahooSearchImages(string query, int page = 1, int maxResults = 10)
     {
-        if (string.IsNullOrWhiteSpace(apikey))
-        {
-            throw new ArgumentException("apikey cannot be null or empty.", nameof(apikey));
-        }
-
-        string systemApiKey = MD5Hash(_configuration["ApiKey"]);
-        if (systemApiKey != apikey)
-        {
-            throw new ArgumentException("apikey is invalid.", nameof(apikey));
-        }
-
         if (string.IsNullOrWhiteSpace(query))
         {
             throw new ArgumentException("Query cannot be null or empty.", nameof(query));
         }
 
-        if (maxResults <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maxResults), "maxResults must be greater than 0.");
-        }
-
         string encodedQuery = HttpUtility.UrlEncode(query);
-        string requestUrl = $"https://sg.search.yahoo.com/search/images?p={encodedQuery}&ei=UTF-8";
+        int b = 1 + (page - 1) * 60; // 计算分页参数
+        string requestUrl = string.Format(_configuration["YahooEndpoint:ImageSearch"], encodedQuery, b);
         int maxRedirects = 10;
 
         using (HttpClientHandler handler = new HttpClientHandler() { AllowAutoRedirect = false })
@@ -403,23 +363,6 @@ public class GetYahooResultController : Controller
                 Console.WriteLine($"An unexpected error occurred: {ex.Message}");
                 return new List<SearchEngineImageResults>();
             }
-        }
-    }
-
-    private static string MD5Hash(string input)
-    {
-        using (MD5 md5 = MD5.Create())
-        {
-            byte[] inputBytes = Encoding.UTF8.GetBytes(input);
-            byte[] hashBytes = md5.ComputeHash(inputBytes);
-
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < hashBytes.Length; i++)
-            {
-                sb.Append(hashBytes[i].ToString("x2"));
-            }
-
-            return sb.ToString();
         }
     }
 }

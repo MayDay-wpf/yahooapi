@@ -1,24 +1,30 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+
 var builder = WebApplication.CreateBuilder(args);
-// 添加跨域策略服务
+
+// 添加跨域策略
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
     {
-        policy.AllowAnyOrigin()  // 允许所有来源
-            .AllowAnyMethod()  // 允许所有HTTP方法
-            .AllowAnyHeader(); // 允许所有请求头
+        policy.AllowAnyOrigin()
+            .AllowAnyMethod()
+            .AllowAnyHeader();
     });
 });
-// Add services to the container.
 
+// 添加控制器
 builder.Services.AddControllers();
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+
+// 配置Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// Swagger（开发环境启用）
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -27,8 +33,34 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.UseCors("AllowAll"); 
+app.UseCors("AllowAll");
 
+// 添加自定义ApiKey验证中间件
+app.Use(async (context, next) =>
+{
+    var apiKeysString = builder.Configuration["ApiKey"];
+    var validApiKeys = apiKeysString?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+        .Select(k => k.Trim())
+        .ToList() ?? new List<string>();
+
+    if (context.Request.Headers.TryGetValue("Authorization", out var incomingApiKeys))
+    {
+        var incomingKeys = incomingApiKeys.ToString()
+            .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(k => k.Trim());
+
+        if (incomingKeys.Any(k => validApiKeys.Contains(k)))
+        {
+            await next();
+            return;
+        }
+    }
+
+    context.Response.StatusCode = 401;
+    await context.Response.WriteAsync("Unauthorized: Invalid ApiKey");
+});
+
+// 继续请求
 app.UseAuthorization();
 
 app.MapControllers();
